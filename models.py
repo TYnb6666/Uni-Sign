@@ -74,7 +74,7 @@ class Uni_Sign(nn.Module):
         super(Uni_Sign, self).__init__()
         self.args = args
         
-        self.modes = ['body', 'left', 'right', 'face_all']
+        self.modes = ['body', 'left', 'right', 'face']
         
         self.graph, A = {}, []
         # project (x,y,score) to hidden dim
@@ -251,7 +251,7 @@ class Uni_Sign(nn.Module):
                         
                     gcn_feat = gcn_feat + body_feat[..., -1][...,None].detach()
 
-                elif part == 'face_all':
+                elif part == 'face':
                     gcn_feat = gcn_feat + body_feat[..., 0][...,None].detach()
 
                 else:

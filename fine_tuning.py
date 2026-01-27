@@ -4,6 +4,8 @@ from torch.utils.data import DataLoader
 from models import Uni_Sign
 import utils as utils
 from datasets import S2T_Dataset
+from data_loader_rotation import load_label_mappings, build_vocab
+from data_loader_multigraph import SignLanguageMultiGraphDataset, collate_fn_multigraph
 import os
 import time
 import argparse, json, datetime
@@ -23,41 +25,40 @@ def main(args):
     utils.set_seed(args.seed)
 
     print(f"Creating dataset:")
-        
-    train_data = S2T_Dataset(path=train_label_paths[args.dataset], 
-                             args=args, phase='train')
+    mappings = load_label_mappings()
+    vocab = build_vocab(mappings)
+
+    train_data = SignLanguageMultiGraphDataset(split='train', mappings=mappings, vocab=vocab)
     print(train_data)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_data,shuffle=True)
     train_dataloader = DataLoader(train_data,
                                  batch_size=args.batch_size, 
                                  num_workers=args.num_workers, 
-                                 collate_fn=train_data.collate_fn,
+                                 collate_fn=collate_fn_multigraph,
                                  sampler=train_sampler, 
                                  pin_memory=args.pin_mem,
                                  drop_last=True)
         
-    test_data = S2T_Dataset(path=test_label_paths[args.dataset], 
-                            args=args, phase='test')
+    test_data = SignLanguageMultiGraphDataset(split='test', mappings=mappings, vocab=vocab)
     print(test_data)
     # test_sampler = torch.utils.data.distributed.DistributedSampler(test_data,shuffle=False)
     test_sampler = torch.utils.data.SequentialSampler(test_data)
     test_dataloader = DataLoader(test_data,
                                  batch_size=args.batch_size,
                                  num_workers=args.num_workers, 
-                                 collate_fn=test_data.collate_fn,
+                                 collate_fn=collate_fn_multigraph,
                                  sampler=test_sampler, 
                                  pin_memory=args.pin_mem)
 
     if "How2Sign" not in args.dataset:
-        dev_data = S2T_Dataset(path=dev_label_paths[args.dataset],
-                               args=args, phase='dev')
+        dev_data = SignLanguageMultiGraphDataset(split='dev', mappings=mappings, vocab=vocab)
         print(dev_data)
         # dev_sampler = torch.utils.data.distributed.DistributedSampler(dev_data,shuffle=False)
         dev_sampler = torch.utils.data.SequentialSampler(dev_data)
         dev_dataloader = DataLoader(dev_data,
                                     batch_size=args.batch_size,
                                     num_workers=args.num_workers,
-                                    collate_fn=dev_data.collate_fn,
+                                    collate_fn=collate_fn_multigraph,
                                     sampler=dev_sampler,
                                     pin_memory=args.pin_mem)
     else:

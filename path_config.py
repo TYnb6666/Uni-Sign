@@ -12,34 +12,32 @@ class DataConfig:
     # We use os.environ.get to allow server configuration without changing code.
     
     # Hand Data
-    HAND_DATA_ROOT = os.environ.get('HAND_DATA_ROOT', os.path.join(PROJECT_ROOT, "Hand_Processed"))
-    # HAND_DATA_ROOT = r"E:\ServerData\Hands"
+    HAND_DATA_ROOT = os.environ.get('HAND_DATA_ROOT', r"D:\Datasets\Label_Corrected\processed")
 
     # Face Data
-    FACE_DATA_ROOT = os.environ.get('FACE_DATA_ROOT', r"D:\Datasets\Face_Processed")
+    FACE_DATA_ROOT = os.environ.get('FACE_DATA_ROOT', r"D:\Datasets\Label_Corrected\processed")
     
     # Pose Data
-    POSE_DATA_ROOT = os.environ.get('POSE_DATA_ROOT', r"D:\Datasets\Pose_Processed")
+    POSE_DATA_ROOT = os.environ.get('POSE_DATA_ROOT', r"D:\Datasets\Label_Corrected\processed")
     
     # Label Data
-    LABEL_ROOT = os.environ.get('LABEL_ROOT', os.path.join(PROJECT_ROOT, "CE-CSL", "label"))
+    LABEL_ROOT = os.environ.get('LABEL_ROOT', r"D:\Datasets\sentence_label")
     # ---------------------------------------------------------
     
     @classmethod
     def get_label_file(cls, split):
-        return os.path.join(cls.LABEL_ROOT, f'{split}.csv')
+        # Using split_1.txt for train/dev/test split info, but strict label file usage depends on loader
+        return os.path.join(cls.LABEL_ROOT, f'{split}.pkl' if split != 'split_1' else 'split_1.txt')
 
     @classmethod
     def get_hand_data_path(cls, split, group, sample_id):
-        # Matches structure: Hand_Processed/train/A/train-00001/data/hand_data.csv
-        return os.path.join(cls.HAND_DATA_ROOT, split, group, sample_id, "data", "hand_data.csv")
+        # Structure: D:\Datasets\Label_Corrected\processed\<video_name>\data\keypoints.pkl
+        return os.path.join(cls.HAND_DATA_ROOT, sample_id, "data", "keypoints.pkl")
 
     @classmethod
     def get_face_data_path(cls, split, group, sample_id):
-        # Assuming typical structure for Face data if it follows the pattern
-        # Adjust as needed based on actual Face data structure
-        return os.path.join(cls.FACE_DATA_ROOT, split, group, sample_id, "data", "face_data.csv")
+        return os.path.join(cls.FACE_DATA_ROOT, sample_id, "data", "keypoints.pkl")
 
     @classmethod
     def get_pose_data_path(cls, split, group, sample_id):
-        return os.path.join(cls.POSE_DATA_ROOT, split, group, sample_id, "data", "pose_data.csv")
+        return os.path.join(cls.POSE_DATA_ROOT, sample_id, "data", "keypoints.pkl")

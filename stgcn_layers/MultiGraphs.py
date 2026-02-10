@@ -79,26 +79,34 @@ class Graph:
             self.center = 0  # Nose
 
         elif layout == 'face':
-            # Face subset: 18 nodes
-            # 9 Jaw + 8 Inner Mouth + 1 Nose (connected to all)
-            # Jaw: nodes 0-8 (sequential)
-            # Inner Mouth: nodes 9-16 (closed loop)
-            # Nose: node 17 (center, connects to all)
+            # Face subset: 18 nodes (Sorted by MediaPipe ID in data loader)
+            # MediaPipe IDs used:
+            # [1, 13, 14, 58, 78, 81, 136, 149, 152, 178, 234, 288, 308, 311, 365, 378, 402, 454]
+            # Excluded eye landmarks (33, 263) from PKL to keep 18 nodes.
             self.num_node = 18
+            
+            # Helper to map MP ID to Tensor Index (0-based, sorted)
+            mp_ids_sorted = sorted([1, 13, 14, 58, 78, 81, 136, 149, 152, 178, 234, 288, 308, 311, 365, 378, 402, 454])
+            mp2idx = {mp: i for i, mp in enumerate(mp_ids_sorted)}
+            
             self_link = [(i, i) for i in range(self.num_node)]
 
-            # Jaw chain: 0-1-2-3-4-5-6-7-8
-            jaw_links = [(i, i + 1) for i in range(8)]
+            # Jaw chain: 454->288->365->378->152->149->136->58->234
+            jaw_mp = [454, 288, 365, 378, 152, 149, 136, 58, 234]
+            jaw_links = [(mp2idx[u], mp2idx[v]) for u, v in zip(jaw_mp[:-1], jaw_mp[1:])]
 
-            # Inner mouth closed loop: 9-10-11-12-13-14-15-16-9
-            mouth_links = [(i, i + 1) for i in range(9, 16)] + [(16, 9)]
+            # Inner mouth loop: 78->81->13->311->308->402->14->178 -> 78(close)
+            mouth_mp = [78, 81, 13, 311, 308, 402, 14, 178]
+            mouth_links = [(mp2idx[u], mp2idx[v]) for u, v in zip(mouth_mp[:-1], mouth_mp[1:])]
+            mouth_links.append((mp2idx[178], mp2idx[78])) # Close loop
 
-            # Nose (17) connects to all other nodes
-            nose_links = [(17, i) for i in range(17)]
+            # Nose (1) connects to all other nodes
+            nose_idx = mp2idx[1]
+            nose_links = [(nose_idx, i) for i in range(self.num_node) if i != nose_idx]
 
             neighbor_link = jaw_links + mouth_links + nose_links
             self.edge = self_link + neighbor_link
-            self.center = 17  # Nose
+            self.center = nose_idx
 
         else:
             raise ValueError(f"Unknown layout: {layout}")

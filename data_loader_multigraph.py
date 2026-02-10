@@ -23,15 +23,43 @@ from path_config import DataConfig
 from data_loader_rotation import load_label_mappings, build_vocab
 
 # Index mappings
-POSE_INDICES = [1, 7, 8, 11, 12, 13, 14, 15, 16]  # 9 nodes for body
-FACE_INDICES = [
-    # Jaw (9 points): 454, 288, 365, 378, 152, 149, 136, 58, 234
-    454, 288, 365, 378, 152, 149, 136, 58, 234,
-    # Inner Mouth (8 points): 13, 14, 78, 308, 81, 178, 311, 402
-    13, 14, 78, 308, 81, 178, 311, 402,
-    # Nose (1 point): 1
-    1
-]
+# Index mappings (PKL -> MediaPipe)
+# Pose Mapping (9 nodes used in graph)
+POSE_MAPPING = {
+    0: 1,   # Left Eye (Inner) - Used as head root in graph
+    1: 7,   # Left Ear
+    2: 8,   # Right Ear
+    3: 11,  # Left Shoulder
+    4: 12,  # Right Shoulder
+    5: 13,  # Left Elbow
+    6: 14,  # Right Elbow
+    7: 15,  # Left Wrist
+    8: 16,  # Right Wrist
+}
+
+# Face Mapping (18 nodes used in graph, excludes 33 and 263)
+FACE_MAPPING = {
+    0: 1,   # Nose Tip
+    # 1: 33,  # Excluded
+    2: 152, # Chin Bottom
+    # 3: 263, # Excluded
+    4: 13,  # Upper Lip Center
+    5: 14,  # Lower Lip Center
+    6: 58,  # Right Cheek
+    7: 78,  # Left Mouth Corner
+    8: 81,  # Upper Lip Left
+    9: 136, # Left Cheek
+    10: 149, # Lower Lip Left
+    11: 178, # Lower Lip Left Edge
+    12: 234, # Left Face Edge
+    13: 288, # Right Cheek
+    14: 308, # Right Mouth Corner
+    15: 311, # Upper Lip Right
+    16: 365, # Right Cheek
+    17: 378, # Lower Lip Right
+    18: 402, # Lower Lip Right Edge
+    19: 454, # Right Face Edge
+}
 
 
 def crop_scale_3d(motion, thr=0.3):
@@ -43,7 +71,7 @@ def crop_scale_3d(motion, thr=0.3):
         thr: confidence threshold
         
     Returns:
-        result: (T, N, 3) normalized coordinates
+        result: (T, N, 4) normalized coordinates + confidence
         scale: float, the scale factor used
     """
     result = copy.deepcopy(motion)
@@ -53,7 +81,7 @@ def crop_scale_3d(motion, thr=0.3):
     valid_coords = motion[valid_mask][:, :3]
     
     if len(valid_coords) < 4:
-        return np.zeros(motion.shape[:-1] + (3,)), 0.0
+        return np.zeros(motion.shape), 0.0
     
     # Compute bounding box
     xmin, ymin, zmin = valid_coords.min(axis=0)
@@ -63,7 +91,7 @@ def crop_scale_3d(motion, thr=0.3):
     scale = max(xmax - xmin, ymax - ymin, zmax - zmin)
     
     if scale == 0:
-        return np.zeros(motion.shape[:-1] + (3,)), 0.0
+        return np.zeros(motion.shape), 0.0
     
     # Center
     cx = (xmin + xmax) / 2
@@ -74,37 +102,28 @@ def crop_scale_3d(motion, thr=0.3):
     result_3d = (motion[..., :3] - np.array([cx, cy, cz])) / scale * 2
     result_3d = np.clip(result_3d, -1, 1)
     
-    # Mask invalid points
-    result_3d[~valid_mask] = 0
+    # Combine with original confidence
+    result[..., :3] = result_3d
     
-    return result_3d, scale
+    # Mask invalid points (optional, but keep consistent with previous logic)
+    # Note: Previous logic zeroed out invalid points. 
+    # Here we keep 0s where invalid, but now we have 4 channels.
+    # If confidence is low, the normalized coords might be noisy but valid_mask handles it downstream if needed.
+    # For now, let's zero out xyz if invalid, but keep confidence? 
+    # actually previous code did: result_3d[~valid_mask] = 0
+    result[~valid_mask, :3] = 0
+    
+    return result, scale
 
 
-def clean_dataframe(df):
-    """
-    Apply linear interpolation to fill missing values.
-    Ref: x[t] = (x[t-1] + x[t+1]) / 2
-    Edge cases (start/end) are filled with nearest valid value.
-    """
-    # Sort just in case, though usually sorted
-    if 'frame' in df.columns:
-        df = df.sort_values('frame')
-        
-    # Interpolate internal gaps
-    df = df.interpolate(method='linear', limit_direction='both')
-    
-    # Fill edges (if any NaNs remain at start or end)
-    df = df.ffill().bfill()
-    
-    # Final safety: fill any remaining NaNs (e.g. if *all* are NaN) with 0
-    df = df.fillna(0)
-    
-    return df
+def load_pickle_data(path):
+    with open(path, 'rb') as f:
+        return pickle.load(f)
 
 
 def load_multigraph_data(sample_id, info, split='train'):
     """
-    Load multimodal data for a single sample.
+    Load multimodal data for a single sample from pickle.
     
     Args:
         sample_id: Sample identifier
@@ -112,133 +131,138 @@ def load_multigraph_data(sample_id, info, split='train'):
         split: Dataset split ('train', 'dev', 'test')
         
     Returns:
-        Dict with keys 'left', 'right', 'body', 'face', each (T, V, 3)
+        Dict with keys 'left', 'right', 'body', 'face', each (T, V, 4)
     """
-    group = info['group']
+    group = info.get('group', 'default') # Adjust if 'group' is not present in new info
     
-    # === Load Hand Data ===
-    # === Load Hand Data ===
-    hand_path = DataConfig.get_hand_data_path(split, group, sample_id)
+    # All data is in one pickle file, so we can just use one path getter
+    # or just construct it directly. Using get_hand_data_path as generic getter.
+    pkl_path = DataConfig.get_hand_data_path(split, group, sample_id)
     
-    if not os.path.exists(hand_path):
+    if not os.path.exists(pkl_path):
         return None
         
-    df_hand = pd.read_csv(hand_path)
-    df_hand = clean_dataframe(df_hand)
+    data = load_pickle_data(pkl_path)
     
-    frame_groups = df_hand.groupby('frame')
-    sorted_frames = sorted(frame_groups.groups.keys())
-    T = len(sorted_frames)
+    # All modalities should have same sequence length T
+    # We can check 'pose' for T
+    if 'pose' not in data: 
+         return None
+         
+    pose_raw = np.array(data['pose']) # (T, 17, 4)
+    T = pose_raw.shape[0]
+
+    # === Process Pose ===
+    # Map PKL indices to MediaPipe sorted indices
+    # We need 17 nodes. MP indices are just for reference/graph construction.
+    # We should arrange them in a fixed order. 
+    # Let's assume the graph strategy uses the order defined in POSE_MAPPING values sorted.
+    # Wait, the Graph class usually expects a fixed number of nodes 0..V-1.
+    # The 'indices' in previous code were picking specific columns.
+    # Here we have 17 points. We should just return them as (T, 17, 4).
+    # BUT, we need to ensure they match the adjacency matrix order if the graph relies on specific MP IDs.
+    # The graph usually relies on 0..N indices. If we provide 17 points, the graph should be built for 17 points.
+    # If the user wants "MediaPipe IDs", it implies the Graph definition uses MP IDs.
+    # Let's sort keys of POSE_MAPPING to get consistent ordering if needed?
+    # Or just return the 17 points re-ordered by MP ID? 
+    # Let's sort by MediaPipe ID to be safe and consistent.
+    sorted_pose_mp_ids = sorted(POSE_MAPPING.values())
+    mp_to_pkl_pose = {v: k for k, v in POSE_MAPPING.items()}
     
-    left_hand = np.zeros((T, 21, 3))
-    right_hand = np.zeros((T, 21, 3))
-    
-    for t, frame_num in enumerate(sorted_frames):
-        # In wide format, each frame usually has one row containing both hands
-        group_df = frame_groups.get_group(frame_num)
-        if group_df.empty:
-            continue
-            
-        row = group_df.iloc[0]
+    body = np.zeros((T, 9, 4))
+    for i, mp_idx in enumerate(sorted_pose_mp_ids):
+        pkl_idx = mp_to_pkl_pose[mp_idx]
+        body[:, i] = pose_raw[:, pkl_idx]
         
-        # Extract Left Hand (LH_world_i_x)
-        for i in range(21):
-            left_hand[t, i] = [
-                row.get(f'LH_world_{i}_x', 0),
-                row.get(f'LH_world_{i}_y', 0),
-                row.get(f'LH_world_{i}_z', 0),
-            ]
-            
-        # Extract Right Hand (RH_world_i_x)
-        for i in range(21):
-            right_hand[t, i] = [
-                row.get(f'RH_world_{i}_x', 0),
-                row.get(f'RH_world_{i}_y', 0),
-                row.get(f'RH_world_{i}_z', 0),
-            ]
+    # Scale Pose
+    # Use crop_scale_3d on the body data
+    # Note: crop_scale_3d expects (T, N, 4) and returns (T, N, 4)
+    body, _ = crop_scale_3d(body, thr=0.3)
+
+    # === Process Left Hand ===
+    left_hand = np.zeros((T, 21, 4))
+    if 'left_hand' in data:
+        lh_raw = np.array(data['left_hand']) # (T, 21, 7)
+        if lh_raw.shape[0] > 0:
+            # Slice first 4 channels: x, y, z, conf
+            left_hand = lh_raw[..., :4]
+            T_hand = left_hand.shape[0]
+            # Handle length mismatch
+            min_T = min(T, T_hand)
+            left_hand = left_hand[:min_T]
+            # If hand is shorter? assume aligned for now.
     
-    # Normalize hands (center at wrist)
+    # Center Left Hand at Wrist (Index 0)
+    # Wrist is index 0 in MediaPipe Hand
     for t in range(T):
-        if np.any(left_hand[t] != 0):
-            left_hand[t] = left_hand[t] - left_hand[t, 0:1]
-        if np.any(right_hand[t] != 0):
-            right_hand[t] = right_hand[t] - right_hand[t, 0:1]
-    
-    # Scale hands to unit
-    left_scale = np.max(np.abs(left_hand)) if np.any(left_hand != 0) else 1.0
-    right_scale = np.max(np.abs(right_hand)) if np.any(right_hand != 0) else 1.0
-    hand_scale = max(left_scale, right_scale, 1e-6)
-    
-    left_hand = left_hand / hand_scale
-    right_hand = right_hand / hand_scale
-    
-    # === Load Pose Data ===
-    pose_path = DataConfig.get_pose_data_path(split, group, sample_id)
-    body = np.zeros((T, 9, 3))
-    
-    if os.path.exists(pose_path):
-        df_pose = pd.read_csv(pose_path)
-        df_pose = clean_dataframe(df_pose)
-        
-        pose_groups = {f: g for f, g in df_pose.groupby('frame')}
-        
-        # Build confidence array for crop_scale_3d
-        pose_raw = np.zeros((T, 33, 4))  # 33 full pose points with confidence
-        
-        for t, frame_num in enumerate(sorted_frames):
-            if frame_num in pose_groups:
-                row = pose_groups[frame_num].iloc[0]
-                for i in range(33):
-                    pose_raw[t, i] = [
-                        row.get(f'world_landmark_{i}_x', 0),
-                        row.get(f'world_landmark_{i}_y', 0),
-                        row.get(f'world_landmark_{i}_z', 0),
-                        row.get(f'world_landmark_{i}_visibility', 1.0),
-                    ]
-        
-        # Apply crop_scale_3d to full pose
-        pose_normed, _ = crop_scale_3d(pose_raw, thr=0.3)
-        
-        # Extract subset indices
-        for i, pose_idx in enumerate(POSE_INDICES):
-            body[:, i, :] = pose_normed[:, pose_idx, :]
-    
-    # === Load Face Data ===
-    face_path = DataConfig.get_face_data_path(split, group, sample_id)
-    face = np.zeros((T, 18, 3))
-    
-    if os.path.exists(face_path):
-        df_face = pd.read_csv(face_path)
-        df_face = clean_dataframe(df_face)
-
-
-        
-        # Check if face has landmarks
-        if 'frame' in df_face.columns:
-            face_groups = {f: g for f, g in df_face.groupby('frame')}
+        if np.any(left_hand[t, :, 3] > 0): # Check confidence > 0
+            wrist = left_hand[t, 0, :3]
+            left_hand[t, :, :3] = left_hand[t, :, :3] - wrist
             
-            for t, frame_num in enumerate(sorted_frames):
-                if frame_num in face_groups:
-                    row = face_groups[frame_num].iloc[0]
-                    
-                    # Extract face landmarks (center at nose)
-                    face_coords = np.zeros((18, 3))
-                    for i, face_idx in enumerate(FACE_INDICES):
-                        x = row.get(f'world_landmark_{face_idx}_x', 0)
-                        y = row.get(f'world_landmark_{face_idx}_y', 0)
-                        z = row.get(f'world_landmark_{face_idx}_z', 0)
-                        face_coords[i] = [x, y, z]
-                    
-                    # Center at nose (last index = 17)
-                    if np.any(face_coords != 0):
-                        face_coords = face_coords - face_coords[17:18]
-                    
-                    face[t] = face_coords
+    # Scale Left Hand
+    # Calc scale from valid points
+    l_mask = left_hand[..., 3] > 0
+    if np.any(l_mask):
+         l_max = np.max(np.abs(left_hand[..., :3][l_mask])) # 手部动作在空间中伸展的最大范围
+         l_scale = max(l_max, 1e-6)
+         left_hand[..., :3] /= l_scale
+
+    # === Process Right Hand ===
+    right_hand = np.zeros((T, 21, 4))
+    if 'right_hand' in data:
+        rh_raw = np.array(data['right_hand']) # (T, 21, 7)
+        if rh_raw.shape[0] > 0:
+            right_hand = rh_raw[..., :4]
+            min_T = min(T, right_hand.shape[0])
+            right_hand = right_hand[:min_T]
+
+    # Center Right Hand at Wrist
+    for t in range(T):
+        if np.any(right_hand[t, :, 3] > 0):
+            wrist = right_hand[t, 0, :3]
+            right_hand[t, :, :3] = right_hand[t, :, :3] - wrist
             
-            # Scale face to unit
-            face_scale = np.max(np.abs(face)) if np.any(face != 0) else 1.0
-            face = face / max(face_scale, 1e-6)
+    # Scale Right Hand
+    r_mask = right_hand[..., 3] > 0
+    if np.any(r_mask):
+         r_max = np.max(np.abs(right_hand[..., :3][r_mask]))
+         r_scale = max(r_max, 1e-6)
+         right_hand[..., :3] /= r_scale
+
+    # === Process Face ===
+    face = np.zeros((T, 18, 4))
+    if 'face' in data:
+        face_raw = np.array(data['face']) # (T, 20, 3)
+        # Append confidence 1.0
+        conf = np.ones((face_raw.shape[0], face_raw.shape[1], 1))
+        face_4ch = np.concatenate([face_raw, conf], axis=-1)
+        
+        # Map to Sorted MediaPipe IDs
+        sorted_face_mp_ids = sorted(FACE_MAPPING.values())
+        mp_to_pkl_face = {v: k for k, v in FACE_MAPPING.items()}
+        
+        for i, mp_idx in enumerate(sorted_face_mp_ids):
+            pkl_idx = mp_to_pkl_face[mp_idx]
+            face[:, i] = face_4ch[:, pkl_idx]
+            
+    # Center Face at Nose (MP Index 1)
+    # We need to find which index in our sorted 20 points corresponds to Nose (MP 1)
+    # sorted_face_mp_ids[0] should be 1.
+    nose_idx = sorted_face_mp_ids.index(1)
     
+    for t in range(T):
+        # Center if nose is present
+        if np.any(face[t, nose_idx, :3] != 0):
+            nose = face[t, nose_idx, :3]
+            face[t, :, :3] = face[t, :, :3] - nose
+            
+    # Scale Face
+    f_mask = face[..., 3] > 0
+    if np.any(f_mask):
+        f_max = np.max(np.abs(face[..., :3][f_mask]))
+        f_scale = max(f_max, 1e-6)
+        face[..., :3] /= f_scale
+
     return {
         'left': left_hand.astype(np.float32),
         'right': right_hand.astype(np.float32),
@@ -259,10 +283,10 @@ def worker_load_multigraph_sample(args):
     if data is None:
         # Return empty tensors
         data = {
-            'left': np.zeros((1, 21, 3), dtype=np.float32),
-            'right': np.zeros((1, 21, 3), dtype=np.float32),
-            'body': np.zeros((1, 9, 3), dtype=np.float32),
-            'face': np.zeros((1, 18, 3), dtype=np.float32),
+            'left': np.zeros((1, 21, 4), dtype=np.float32),
+            'right': np.zeros((1, 21, 4), dtype=np.float32),
+            'body': np.zeros((1, 9, 4), dtype=np.float32),
+            'face': np.zeros((1, 18, 4), dtype=np.float32),
         }
     
     gloss_list = info['gloss']
@@ -334,10 +358,10 @@ def collate_fn_multigraph(batch):
     batch_size = len(batch)
     
     # Prepare padded tensors
-    left = torch.zeros(batch_size, max_seq_len, 21, 3)
-    right = torch.zeros(batch_size, max_seq_len, 21, 3)
-    body = torch.zeros(batch_size, max_seq_len, 9, 3)
-    face = torch.zeros(batch_size, max_seq_len, 18, 3)
+    left = torch.zeros(batch_size, max_seq_len, 21, 4)
+    right = torch.zeros(batch_size, max_seq_len, 21, 4)
+    body = torch.zeros(batch_size, max_seq_len, 9, 4)
+    face = torch.zeros(batch_size, max_seq_len, 18, 4)
     glosses = torch.zeros(batch_size, max_gloss_len, dtype=torch.long)
     
     seq_lengths = []
@@ -368,7 +392,7 @@ def collate_fn_multigraph(batch):
         'body': body,
         'face': face,
         'name_batch': sample_ids, # models.py uses 'name_batch'
-        'attention_mask': (left.sum(dim=(-1,-2)) != 0).long(), # Approximate mask if not provided? 
+        'attention_mask': (left.sum(dim=(-1,-2)) != 0).long(),
         # Actually models.py expects 'attention_mask'. 
         # In original datasets.py: attention_mask is length-based mask.
     }

@@ -322,15 +322,25 @@ class SignLanguageMultiGraphDataset(Dataset):
         if cache_data:
             print(f"Pre-loading {split} dataset ({len(self.sample_ids)} samples) using {num_processes} processes...")
             
-            load_args = []
-            for sid in self.sample_ids:
-                load_args.append((sid, self.mappings[sid], self.split, self.vocab))
-            
-            with ProcessPoolExecutor(max_workers=num_processes) as executor:
-                results = list(tqdm(executor.map(worker_load_multigraph_sample, load_args), total=len(load_args), desc=f"Caching {split}"))
-            
-            for res in results:
-                self.cached_samples[res['sample_id']] = res
+            if len(self.sample_ids) == 0:
+                print(f"Warning: No samples found for split '{split}'. Check mappings.")
+            else:
+                load_args = []
+                for sid in self.sample_ids:
+                    load_args.append((sid, self.mappings[sid], self.split, self.vocab))
+                
+                # Use sequential for debugging if needed or if list is short
+                results = []
+                try:
+                    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+                        results = list(tqdm(executor.map(worker_load_multigraph_sample, load_args), total=len(load_args), desc=f"Caching {split}"))
+                except Exception as e:
+                    print(f"Multiprocessing failed: {e}. Falling back to sequential.")
+                    results = [worker_load_multigraph_sample(arg) for arg in tqdm(load_args, desc=f"Caching {split} (Sequential)")]
+
+                for res in results:
+                    if res is not None:
+                        self.cached_samples[res['sample_id']] = res
 
     def __len__(self):
         return len(self.sample_ids)

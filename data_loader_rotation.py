@@ -21,31 +21,76 @@ label_files = {
 
 
 # 1. 读取标签文件并创建数据映射
-def load_label_mappings():
+# 1. 读取标签文件并创建数据映射
+def load_label_mappings(task='SLT'):
     mappings = {}
-    for split in DATA_SPLITS:
-        df = pd.read_csv(label_files[split])
-        split_mappings = {}
+    
+    # CSL-Daily specific logic
+    label_root = DataConfig.LABEL_ROOT
+    
+    # Load CSL-Daily Labels (csl2020ct_v2.pkl)
+    pkl_path = os.path.join(label_root, 'csl2020ct_v2.pkl') 
+    csl_labels = {}
+    if os.path.exists(pkl_path):
+        import pickle
+        with open(pkl_path, 'rb') as f:
+            data = pickle.load(f)
+            # Structure: {'info': [{'name': '...', 'label_gloss': [...], ...}, ...], 
+            #             'gloss_map': [...], 'char_map': [...], ...}
+            if isinstance(data, dict) and 'info' in data:
+                for item in data['info']:
+                    csl_labels[item['name']] = item
+            elif isinstance(data, list):
+                for item in data:
+                    csl_labels[item['name']] = item
+            else:
+                print(f"Warning: Unknown data format in {pkl_path}, keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
+    else:
+         print(f"Warning: {pkl_path} not found.")
 
-        for _, row in df.iterrows():
-            # 获取完整样本ID（如"train-03372"）
-            sample_id = row['Number']
-            group = row['Translator']
-
-            # 构建数据文件完整路径
-            data_path = DataConfig.get_hand_data_path(split, group, sample_id)
-
-            # 提取词标注作为标签
-            gloss = row['Gloss'].strip().split('/')
-            gloss = [g for g in gloss if g]  # 移除空标签
-
-            split_mappings[sample_id] = {
-                'group': group,
-                'gloss': gloss,
-                'data_path': data_path  # 直接存储完整路径
-            }
-
-        mappings[split] = split_mappings
+    # Load Split Info (split_1.txt)
+    split_path = os.path.join(label_root, 'split_1.txt')
+    split_map = {}
+    if os.path.exists(split_path):
+        with open(split_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                # Format: "S000048_P0000_T00|train"
+                line = line.strip()
+                if not line or line.startswith('name|'): continue
+                
+                parts = line.split('|')
+                if len(parts) < 2: 
+                     parts = line.split() # Try whitespace
+                
+                if len(parts) >= 2:
+                    vid_name = parts[0]
+                    split_name = parts[1]
+                    split_map[vid_name] = split_name
+    else:
+        print(f"Warning: {split_path} not found.")
+    
+    # Construct mappings
+    for split in ['train', 'dev', 'test']:
+        mappings[split] = {}
+        
+    for vid_name, info in csl_labels.items():
+        if vid_name not in split_map:
+            continue
+            
+        split = split_map[vid_name]
+        if split not in mappings:
+            continue
+            
+        data_path = DataConfig.get_hand_data_path(split, 'default', vid_name)
+        
+        # Use 'label_gloss' for CSL-Daily
+        gloss = info.get('label_gloss', info.get('gloss', []))
+        
+        mappings[split][vid_name] = {
+            'gloss': gloss,
+            'text': " ".join(gloss), # Simple join for text
+            'data_path': data_path
+        }
 
     return mappings
 

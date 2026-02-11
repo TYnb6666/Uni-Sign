@@ -15,7 +15,8 @@ def verify_face_graph():
     A = graph.A
     print(f"Adjacency Matrix Shape: {A.shape}")
     
-    expected_shape = (3, 18, 18) # (K, V, V)
+    # strategy='distance' with max_hop=1 generates 2 matrices (0-hop, 1-hop)
+    expected_shape = (2, 18, 18) # (K, V, V)
     if A.shape == expected_shape:
         print("PASS: Shape is correct.")
     else:

@@ -59,6 +59,10 @@ def verify_pipeline():
     assert sample['body'].shape[-1] == 4, f"Body last dim should be 4, got {sample['body'].shape[-1]}"
     assert sample['face'].shape[-1] == 4, f"Face last dim should be 4, got {sample['face'].shape[-1]}"
     
+    # Verify Node Counts
+    assert sample['body'].shape[1] == 9, f"Body should have 9 nodes, got {sample['body'].shape[1]}"
+    assert sample['face'].shape[1] == 18, f"Face should have 18 nodes, got {sample['face'].shape[1]}"
+    
     # 4. Instantiate Model
     print("Instantiating Model...")
     args = MockArgs()
@@ -76,7 +80,7 @@ def verify_pipeline():
     output = model(src_input, tgt_input)
     
     print("Forward Pass Successful.")
-    print("Loss:", output['lines'] if 'loss' in output else output.keys())
+    print("Loss:", output['loss'] if 'loss' in output else output.keys())
     print("Output shapes verified.")
 
 if __name__ == "__main__":

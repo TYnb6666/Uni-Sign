@@ -311,7 +311,7 @@ def worker_load_multigraph_sample(args):
 class SignLanguageMultiGraphDataset(Dataset):
     """Dataset for Multi-Graph ST-GCN."""
     
-    def __init__(self, split, mappings, vocab, cache_data=True, num_processes=8):
+    def __init__(self, split, mappings, vocab, cache_data=False, num_processes=8):
         self.split = split
         self.mappings = mappings[split]
         self.vocab = vocab

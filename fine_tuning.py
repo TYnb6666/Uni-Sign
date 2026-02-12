@@ -30,7 +30,10 @@ def main(args):
 
     train_data = SignLanguageMultiGraphDataset(split='train', mappings=mappings, vocab=vocab)
     print(train_data)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_data,shuffle=True)
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_data, shuffle=True)
+    else:
+        train_sampler = torch.utils.data.RandomSampler(train_data)
     train_dataloader = DataLoader(train_data,
                                  batch_size=args.batch_size, 
                                  num_workers=args.num_workers, 
@@ -99,9 +102,12 @@ def main(args):
                 num_training_steps=int(args.epochs * len(train_dataloader)/args.gradient_accumulation_steps),
             )
     
-    model, optimizer, lr_scheduler = utils.init_deepspeed(args, model, optimizer, lr_scheduler)
-    model_without_ddp = model.module.module
-    # print(model_without_ddp)
+    if args.distributed:
+        model, optimizer, lr_scheduler = utils.init_deepspeed(args, model, optimizer, lr_scheduler)
+        model_without_ddp = model.module.module
+    else:
+        # Single GPU: use standard AMP scaler for bf16
+        print("Using single GPU training (no DeepSpeed)")
     print(optimizer)
 
     output_dir = Path(args.output_dir)
@@ -126,7 +132,7 @@ def main(args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         
-        train_stats = train_one_epoch(args, model, train_dataloader, optimizer, epoch)
+        train_stats = train_one_epoch(args, model, train_dataloader, optimizer, epoch, lr_scheduler)
 
         if args.output_dir:
             checkpoint_paths = [output_dir / f'checkpoint_{epoch}.pth']
@@ -192,7 +198,7 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
 
-def train_one_epoch(args, model, data_loader, optimizer, epoch):
+def train_one_epoch(args, model, data_loader, optimizer, epoch, lr_scheduler=None):
     model.train()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -202,22 +208,33 @@ def train_one_epoch(args, model, data_loader, optimizer, epoch):
     optimizer.zero_grad()
 
     target_dtype = None
-    if model.bfloat16_enabled():
+    use_deepspeed = args.distributed and hasattr(model, 'bfloat16_enabled')
+    if use_deepspeed and model.bfloat16_enabled():
         target_dtype = torch.bfloat16
 
     for step, (src_input, tgt_input) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-        if target_dtype != None:
+        if target_dtype is not None:
             for key in src_input.keys():
                 if isinstance(src_input[key], torch.Tensor):
                     src_input[key] = src_input[key].to(target_dtype).cuda()
+        else:
+            for key in src_input.keys():
+                if isinstance(src_input[key], torch.Tensor):
+                    src_input[key] = src_input[key].cuda()
 
         if args.task == "CSLR":
             tgt_input['gt_sentence'] = tgt_input['gt_gloss']
         stack_out = model(src_input, tgt_input)
         
         total_loss = stack_out['loss']
-        model.backward(total_loss)
-        model.step()
+        if use_deepspeed:
+            model.backward(total_loss)
+            model.step()
+        else:
+            total_loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
 
         loss_value = total_loss.item()
         if not math.isfinite(loss_value):
@@ -240,7 +257,8 @@ def evaluate(args, data_loader, model, model_without_ddp, phase):
     header = 'Test:'
 
     target_dtype = None
-    if model.bfloat16_enabled():
+    use_deepspeed = args.distributed and hasattr(model, 'bfloat16_enabled')
+    if use_deepspeed and model.bfloat16_enabled():
         target_dtype = torch.bfloat16
         
     with torch.no_grad():
@@ -249,10 +267,14 @@ def evaluate(args, data_loader, model, model_without_ddp, phase):
         tgt_name = []
  
         for step, (src_input, tgt_input) in enumerate(metric_logger.log_every(data_loader, 10, header)):
-            if target_dtype != None:
+            if target_dtype is not None:
                 for key in src_input.keys():
                     if isinstance(src_input[key], torch.Tensor):
                         src_input[key] = src_input[key].to(target_dtype).cuda()
+            else:
+                for key in src_input.keys():
+                    if isinstance(src_input[key], torch.Tensor):
+                        src_input[key] = src_input[key].cuda()
             
             if args.task == "CSLR":
                 tgt_input['gt_sentence'] = tgt_input['gt_gloss']

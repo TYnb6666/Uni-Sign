@@ -116,6 +116,7 @@ def main(args):
     max_accuracy = 0
     if args.task == "CSLR":
         max_accuracy = 1000
+    min_loss = float('inf')
     
     if args.eval:
         if utils.is_main_process():
@@ -134,16 +135,20 @@ def main(args):
         
         train_stats = train_one_epoch(args, model, train_dataloader, optimizer, epoch, lr_scheduler)
 
-        if args.output_dir:
-            checkpoint_paths = [output_dir / f'checkpoint_{epoch}.pth']
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': get_requires_grad_dict(model_without_ddp),
-                }, checkpoint_path)
-
         # single gpu inference
         if utils.is_main_process():
             test_stats = evaluate(args, dev_dataloader, model, model_without_ddp, phase='dev')
+            
+            if test_stats['loss'] < min_loss:
+                min_loss = test_stats['loss']
+                if args.output_dir:
+                    checkpoint_paths = [output_dir / 'best_loss_checkpoint.pth']
+                    for checkpoint_path in checkpoint_paths:
+                        utils.save_on_master({
+                            'model': get_requires_grad_dict(model_without_ddp),
+                        }, checkpoint_path)
+                print(f"New lowest test loss: {min_loss:.4f}, model saved to best_loss_checkpoint.pth")
+
             evaluate(args, test_dataloader, model, model_without_ddp, phase='test')
 
             if args.task == "SLT":

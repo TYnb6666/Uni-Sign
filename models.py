@@ -116,6 +116,20 @@ class Uni_Sign(nn.Module):
 
         self.mt5_model = MT5ForConditionalGeneration.from_pretrained(mt5_path)
         self.mt5_tokenizer = T5Tokenizer.from_pretrained(mt5_path, legacy=False)
+
+    def _build_pose_attention_mask(self, src_input):
+        """Build frame-level mask from actually enabled modalities.
+
+        This is critical for modality ablations (e.g., left+right only):
+        length-based masks may mark frames as valid even when selected modalities
+        are all zeros on those frames.
+        """
+        pose_mask = None
+        for part in self.modes:
+            part_valid = (src_input[part].abs().sum(dim=(-1, -2)) > 0)
+            pose_mask = part_valid if pose_mask is None else (pose_mask | part_valid)
+
+        return pose_mask.long()
     
         
     def _init_weights(self, m):
@@ -185,8 +199,9 @@ class Uni_Sign(nn.Module):
         prefix_embeds = self.mt5_model.encoder.embed_tokens(prefix_token['input_ids'])
         inputs_embeds = torch.cat([prefix_embeds, inputs_embeds], dim=1)
 
+        pose_attention_mask = self._build_pose_attention_mask(src_input)
         attention_mask = torch.cat([prefix_token['attention_mask'],
-                                    src_input['attention_mask']], dim=1)
+                                    pose_attention_mask], dim=1)
 
         tgt_input_tokenizer = self.mt5_tokenizer(tgt_input['gt_sentence'], 
                                                 return_tensors="pt", 
@@ -242,4 +257,3 @@ def get_requires_grad_dict(model):
     params_to_update = {k: v for k, v in model.state_dict().items() if param_requires_grad.get(k, True)}
 
     return params_to_update
-

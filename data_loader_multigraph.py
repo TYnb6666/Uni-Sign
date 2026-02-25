@@ -411,14 +411,13 @@ def collate_fn_multigraph(batch):
         'body': body,
         'face': face,
         'name_batch': sample_ids, # models.py uses 'name_batch'
+        # Kept for compatibility; model now builds the effective frame mask
+        # from enabled modalities (`args.input_setting`).
         'attention_mask': (left.sum(dim=(-1,-2)) != 0).long(),
-        # Actually models.py expects 'attention_mask'. 
-        # In original datasets.py: attention_mask is length-based mask.
     }
     
-    # Create attention mask based on sequence length
-    # Assuming all modalities have same length T (which they do by construction in load_multigraph_data)
-    # We can just use seq_lengths
+    # Legacy length-based mask (kept for compatibility/debugging).
+    # Effective mask is now recomputed in models.py from active modalities.
     mask_gen = []
     for l in seq_lengths:
         mask_gen.append(torch.ones(l))

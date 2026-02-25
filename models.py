@@ -73,12 +73,16 @@ class Uni_Sign(nn.Module):
     def __init__(self, args):
         super(Uni_Sign, self).__init__()
         self.args = args
-        
-        self.modes = ['body', 'left', 'right', 'face']
+
+        setting_to_modes = {
+            'lr': ['left', 'right'],
+            'lrb': ['body', 'left', 'right'],
+            'lrbf': ['body', 'left', 'right', 'face'],
+        }
+        self.modes = setting_to_modes.get(args.input_setting, setting_to_modes['lrbf'])
         
         self.graph, A = {}, []
         # project (x,y,z,score) to hidden dim
-        hidden_dim = args.hidden_dim
         self.proj_linear = nn.ModuleDict()
         for mode in self.modes:
             self.graph[mode] = Graph(layout=f'{mode}', strategy='distance', max_hop=1)
@@ -97,8 +101,9 @@ class Uni_Sign(nn.Module):
         self.fusion_gcn_modules['left'] = self.fusion_gcn_modules['right']
         self.proj_linear['left'] = self.proj_linear['right']
 
-        self.part_para = nn.Parameter(torch.zeros(hidden_dim*len(self.modes)))
-        self.pose_proj = nn.Linear(256*4, 768)
+        self.part_dim = final_dim
+        self.part_para = nn.Parameter(torch.zeros(self.part_dim * len(self.modes)))
+        self.pose_proj = nn.Linear(self.part_dim * len(self.modes), 768)
         
         self.apply(self._init_weights)
         
@@ -111,6 +116,20 @@ class Uni_Sign(nn.Module):
 
         self.mt5_model = MT5ForConditionalGeneration.from_pretrained(mt5_path)
         self.mt5_tokenizer = T5Tokenizer.from_pretrained(mt5_path, legacy=False)
+
+    def _build_pose_attention_mask(self, src_input):
+        """Build frame-level mask from actually enabled modalities.
+
+        This is critical for modality ablations (e.g., left+right only):
+        length-based masks may mark frames as valid even when selected modalities
+        are all zeros on those frames.
+        """
+        pose_mask = None
+        for part in self.modes:
+            part_valid = (src_input[part].abs().sum(dim=(-1, -2)) > 0)
+            pose_mask = part_valid if pose_mask is None else (pose_mask | part_valid)
+
+        return pose_mask.long()
     
         
     def _init_weights(self, m):
@@ -151,22 +170,15 @@ class Uni_Sign(nn.Module):
             gcn_feat = self.gcn_modules[part](proj_feat)
             if part == 'body':
                 body_feat = gcn_feat
-
-            else:
-                assert not body_feat is None
+            elif body_feat is not None:
                 if part == 'left':
                     # Pose RGB fusion removed
                     gcn_feat = gcn_feat + body_feat[..., -2][...,None].detach()
-                    
                 elif part == 'right':
                     # Pose RGB fusion removed
                     gcn_feat = gcn_feat + body_feat[..., -1][...,None].detach()
-
                 elif part == 'face':
                     gcn_feat = gcn_feat + body_feat[..., 0][...,None].detach()
-
-                else:
-                    raise NotImplementedError
             
             # temporal gcn forward
             gcn_feat = self.fusion_gcn_modules[part](gcn_feat) #B,C,T,V
@@ -187,8 +199,9 @@ class Uni_Sign(nn.Module):
         prefix_embeds = self.mt5_model.encoder.embed_tokens(prefix_token['input_ids'])
         inputs_embeds = torch.cat([prefix_embeds, inputs_embeds], dim=1)
 
+        pose_attention_mask = self._build_pose_attention_mask(src_input)
         attention_mask = torch.cat([prefix_token['attention_mask'],
-                                    src_input['attention_mask']], dim=1)
+                                    pose_attention_mask], dim=1)
 
         tgt_input_tokenizer = self.mt5_tokenizer(tgt_input['gt_sentence'], 
                                                 return_tensors="pt", 
@@ -244,4 +257,3 @@ def get_requires_grad_dict(model):
     params_to_update = {k: v for k, v in model.state_dict().items() if param_requires_grad.get(k, True)}
 
     return params_to_update
-

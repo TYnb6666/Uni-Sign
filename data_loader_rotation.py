@@ -83,12 +83,24 @@ def load_label_mappings(task='SLT'):
             
         data_path = DataConfig.get_hand_data_path(split, 'default', vid_name)
         
-        # Use 'label_gloss' for CSL-Daily
+        # Use gloss for recognition targets.
         gloss = info.get('label_gloss', info.get('gloss', []))
+
+        # Use natural language sentence for SLT targets when available.
+        # CSL-Daily pkl usually contains `label_char`.
+        text = info.get('label_char', info.get('text', gloss))
+
+        if isinstance(text, list):
+            # Chinese char lists should be joined without extra spaces.
+            text = ''.join(map(str, text))
+        elif text is None:
+            text = " ".join(gloss)
+        else:
+            text = str(text)
         
         mappings[split][vid_name] = {
             'gloss': gloss,
-            'text': " ".join(gloss), # Simple join for text
+            'text': text,
             'data_path': data_path
         }
 

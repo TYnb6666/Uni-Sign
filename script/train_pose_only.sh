@@ -1,17 +1,21 @@
-output_dir=out/pose_only_training
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Using fine_tuning.py as it uses the updated data_loader_multigraph.py
-# We do NOT leverage Stage 1/2 pre-training here as their scripts use the old datasets.py
-# This serves as a "Train from Scratch" or "Fine-tune" script depending on if you provide --finetune
+output_dir=${1:-out/pose_only_training}
+
+# Using fine_tuning.py + data_loader_multigraph.py
+# "From scratch" here means: no Uni-Sign stage checkpoint (--finetune omitted).
+# Note: mT5 backbone still loads from ./pretrained_weight/mt5-base.
 
 deepspeed --include localhost:0,1,2,3 --master_port 29511 fine_tuning.py \
   --batch-size 8 \
   --gradient-accumulation-steps 1 \
   --epochs 50 \
-  --opt AdamW \
+  --opt adamw \
   --lr 3e-4 \
-  --output_dir $output_dir \
+  --output_dir "$output_dir" \
   --dataset CSL_Daily \
-  --task SLT \
-  # --finetune out/stage1/best.pth # Uncomment if you have a compatible Stage 1 checkpoint
-  # --rgb_support # Disabled for pose-only
+  --task SLT
+
+# If you have a compatible checkpoint, append:
+#   --finetune path/to/checkpoint.pth

@@ -531,6 +531,14 @@ def get_args_parser():
     # select label smooth
     parser.add_argument("--label_smoothing", default=0.2, type=float)
 
+    # modality ablation for pose-only input
+    parser.add_argument(
+        "--input_setting",
+        default="lrbf",
+        choices=["lr", "lrb", "lrbf"],
+        help="Input modality setting: lr=left+right, lrb=left+right+body, lrbf=left+right+body+face",
+    )
+
     # online inference
     parser.add_argument("--online_video", default="", type=str)
 

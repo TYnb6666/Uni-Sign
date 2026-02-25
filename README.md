@@ -73,6 +73,16 @@ bash ./script/train_pose_only.sh
 ```
 This command does **not** pass `--finetune`, so training starts without loading Uni-Sign stage checkpoints.
 
+Ablation modality settings are supported via the second argument:
+```bash
+# left + right
+bash ./script/train_pose_only.sh out/ablation_lr lr
+# left + right + body
+bash ./script/train_pose_only.sh out/ablation_lrb lrb
+# left + right + body + face
+bash ./script/train_pose_only.sh out/ablation_lrbf lrbf
+```
+
 For a one-epoch pipeline sanity check:
 ```bash
 bash ./script/train_test.sh

@@ -73,12 +73,16 @@ class Uni_Sign(nn.Module):
     def __init__(self, args):
         super(Uni_Sign, self).__init__()
         self.args = args
-        
-        self.modes = ['body', 'left', 'right', 'face']
+
+        setting_to_modes = {
+            'lr': ['left', 'right'],
+            'lrb': ['body', 'left', 'right'],
+            'lrbf': ['body', 'left', 'right', 'face'],
+        }
+        self.modes = setting_to_modes.get(args.input_setting, setting_to_modes['lrbf'])
         
         self.graph, A = {}, []
         # project (x,y,z,score) to hidden dim
-        hidden_dim = args.hidden_dim
         self.proj_linear = nn.ModuleDict()
         for mode in self.modes:
             self.graph[mode] = Graph(layout=f'{mode}', strategy='distance', max_hop=1)
@@ -97,8 +101,9 @@ class Uni_Sign(nn.Module):
         self.fusion_gcn_modules['left'] = self.fusion_gcn_modules['right']
         self.proj_linear['left'] = self.proj_linear['right']
 
-        self.part_para = nn.Parameter(torch.zeros(hidden_dim*len(self.modes)))
-        self.pose_proj = nn.Linear(256*4, 768)
+        self.part_dim = final_dim
+        self.part_para = nn.Parameter(torch.zeros(self.part_dim * len(self.modes)))
+        self.pose_proj = nn.Linear(self.part_dim * len(self.modes), 768)
         
         self.apply(self._init_weights)
         
@@ -151,22 +156,15 @@ class Uni_Sign(nn.Module):
             gcn_feat = self.gcn_modules[part](proj_feat)
             if part == 'body':
                 body_feat = gcn_feat
-
-            else:
-                assert not body_feat is None
+            elif body_feat is not None:
                 if part == 'left':
                     # Pose RGB fusion removed
                     gcn_feat = gcn_feat + body_feat[..., -2][...,None].detach()
-                    
                 elif part == 'right':
                     # Pose RGB fusion removed
                     gcn_feat = gcn_feat + body_feat[..., -1][...,None].detach()
-
                 elif part == 'face':
                     gcn_feat = gcn_feat + body_feat[..., 0][...,None].detach()
-
-                else:
-                    raise NotImplementedError
             
             # temporal gcn forward
             gcn_feat = self.fusion_gcn_modules[part](gcn_feat) #B,C,T,V

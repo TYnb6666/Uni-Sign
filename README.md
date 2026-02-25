@@ -65,6 +65,32 @@ All scripts must be executed within the Uni-Sign directory.
 
 For the pre-training code, please refer to [Issue #15](https://github.com/ZechengLi19/Uni-Sign/issues/15) for detailed instructions. Thanks to [@williams-bert](https://github.com/williams-bert) for generously sharing the [code implementation](https://github.com/williams-bert/Uni-Sign/blob/main/pre_training.py).
 ### Training
+
+#### Quick start: train from scratch (without Uni-Sign stage checkpoints)
+If you only want to train your own modified codebase from scratch, run:
+```bash
+bash ./script/train_pose_only.sh
+```
+This command does **not** pass `--finetune`, so training starts without loading Uni-Sign stage checkpoints.
+
+Ablation modality settings are supported via the second argument:
+```bash
+# left + right
+bash ./script/train_pose_only.sh out/ablation_lr lr
+# left + right + body
+bash ./script/train_pose_only.sh out/ablation_lrb lrb
+# left + right + body + face
+bash ./script/train_pose_only.sh out/ablation_lrbf lrbf
+```
+
+For a one-epoch pipeline sanity check:
+```bash
+bash ./script/train_test.sh
+```
+
+> Note: the current implementation still loads mT5 weights from `./pretrained_weight/mt5-base`.
+> So “from scratch” here means **no Uni-Sign checkpoint warm-start**, not random initialization of mT5.
+
 **Stage 1**: pose-only pre-training.
 ```bash
 bash ./script/train_stage1.sh

@@ -301,9 +301,6 @@ def evaluate(args, data_loader, model, model_without_ddp, phase):
     tokenizer = model_without_ddp.mt5_tokenizer
     padding_value = tokenizer.eos_token_id
     
-    pad_tensor = torch.ones(150-len(tgt_pres[0])).cuda() * padding_value
-    tgt_pres[0] = torch.cat((tgt_pres[0],pad_tensor.long()),dim = 0)
-
     tgt_pres = pad_sequence(tgt_pres,batch_first=True,padding_value=padding_value)
     tgt_pres = tokenizer.batch_decode(tgt_pres, skip_special_tokens=True)
 

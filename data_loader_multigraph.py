@@ -188,14 +188,16 @@ def load_multigraph_data(sample_id, info, split='train'):
             # Slice first 4 channels: x, y, z, conf
             left_hand = lh_raw[..., :4]
             T_hand = left_hand.shape[0]
-            # Handle length mismatch
-            min_T = min(T, T_hand)
-            left_hand = left_hand[:min_T]
-            # If hand is shorter? assume aligned for now.
+            # Handle length mismatch safely: keep tensor length as T.
+            if T_hand >= T:
+                left_hand = left_hand[:T]
+            else:
+                pad = np.zeros((T - T_hand, 21, 4), dtype=left_hand.dtype)
+                left_hand = np.concatenate([left_hand, pad], axis=0)
     
     # Center Left Hand at Wrist (Index 0)
     # Wrist is index 0 in MediaPipe Hand
-    for t in range(T):
+    for t in range(left_hand.shape[0]):
         if np.any(left_hand[t, :, 3] > 0): # Check confidence > 0
             wrist = left_hand[t, 0, :3]
             left_hand[t, :, :3] = left_hand[t, :, :3] - wrist
@@ -214,11 +216,15 @@ def load_multigraph_data(sample_id, info, split='train'):
         rh_raw = np.array(data['right_hand']) # (T, 21, 7)
         if rh_raw.shape[0] > 0:
             right_hand = rh_raw[..., :4]
-            min_T = min(T, right_hand.shape[0])
-            right_hand = right_hand[:min_T]
+            T_hand = right_hand.shape[0]
+            if T_hand >= T:
+                right_hand = right_hand[:T]
+            else:
+                pad = np.zeros((T - T_hand, 21, 4), dtype=right_hand.dtype)
+                right_hand = np.concatenate([right_hand, pad], axis=0)
 
     # Center Right Hand at Wrist
-    for t in range(T):
+    for t in range(right_hand.shape[0]):
         if np.any(right_hand[t, :, 3] > 0):
             wrist = right_hand[t, 0, :3]
             right_hand[t, :, :3] = right_hand[t, :, :3] - wrist
@@ -298,6 +304,7 @@ def worker_load_multigraph_sample(args):
     )
     
     gloss_string = " ".join(gloss_list)
+    text_string = str(info.get('text', gloss_string))
     return {
         'left': torch.tensor(data['left'], dtype=torch.float32),
         'right': torch.tensor(data['right'], dtype=torch.float32),
@@ -305,6 +312,7 @@ def worker_load_multigraph_sample(args):
         'face': torch.tensor(data['face'], dtype=torch.float32),
         'gloss': torch.tensor(gloss_indices, dtype=torch.long),
         'gloss_string': gloss_string,
+        'text_string': text_string,
         'sample_id': sample_id,
     }
 
@@ -395,7 +403,7 @@ def collate_fn_multigraph(batch):
         seq_lengths.append(T)
         gloss_lengths.append(L)
         sample_ids.append(b['sample_id'])
-        gt_sentences.append(b['gloss_string'])
+        gt_sentences.append(b.get('text_string', b['gloss_string']))
     
     src_input = {
         'left': left,
